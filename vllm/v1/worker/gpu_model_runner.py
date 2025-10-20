@@ -1245,8 +1245,8 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     continue
 
                 start_idx = max(num_computed_tokens - start_pos, 0)
-                end_idx = min(
-                    num_computed_tokens - start_pos + num_scheduled_tokens,
+                end_idx = max(
+                    num_scheduled_tokens,
                     num_encoder_tokens)
                 assert start_idx < end_idx
                 assert req_id in self.encoder_cache

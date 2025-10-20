@@ -29,6 +29,8 @@ from vllm.transformers_utils.configs.step3_vl import (Step3TextConfig,
                                                       Step3VLConfig)
 from vllm.transformers_utils.configs.ultravox import UltravoxConfig
 
+from vllm.transformers_utils.configs.kimi_audio import KimiAudioConfig, WhisperVQConfig
+
 __all__ = [
     "ChatGLMConfig",
     "DeepseekVLV2Config",
@@ -39,6 +41,7 @@ __all__ = [
     "MLPSpeculatorConfig",
     "MoonViTConfig",
     "KimiVLConfig",
+    "KimiAudioConfig",
     "NemotronConfig",
     "NemotronHConfig",
     "Nemotron_Nano_VL_Config",
@@ -48,4 +51,5 @@ __all__ = [
     "Step3VLConfig",
     "Step3VisionEncoderConfig",
     "Step3TextConfig",
+    "WhisperVQConfig",
 ]

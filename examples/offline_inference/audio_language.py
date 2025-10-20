@@ -271,6 +271,42 @@ def run_qwen2_audio(question: str, audio_count: int) -> ModelRequestData:
     )
 
 
+def run_kimi_audio(question: str, audio_count: int) -> ModelRequestData:
+    model_name = "moonshotai/Kimi-Audio-7B-Instruct"
+
+    assert audio_count == 1
+
+    from transformers import AutoTokenizer
+    from vllm.transformers_utils.processors import KimiAudioProcessor
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    processor = KimiAudioProcessor(text_tokenizer=tokenizer)
+
+    # import librosa
+    # audio_asset_private = librosa.load("asr_example.wav", sr=16000)[0]
+    messages = [
+        {"role": "user", "message_type": "text", "content": "请将音频内容转换为文字。"},
+        {"role": "user", "message_type": "audio", "content": audio_assets[0].audio_and_sample_rate[0]}
+    ]
+    prompts = processor.get_prompt(messages, output_type="text")
+    prompt_token_ids = prompts.get("prompt_token_ids")[0]
+    multi_modal_data = prompts.get("multi_modal_data")
+
+    engine_args = EngineArgs(
+        model=model_name,
+        max_model_len=4096,
+        max_num_seqs=5,
+        limit_mm_per_prompt={"audio": 1},
+        trust_remote_code=True,
+    )
+
+    return ModelRequestData(
+        engine_args=engine_args,
+        prompt_token_ids=prompt_token_ids,
+        multi_modal_data=multi_modal_data,
+        stop_token_ids=[tokenizer._convert_token_to_id('<|im_kimia_text_eos|>')],
+    )
+
+
 # Qwen2.5-Omni
 def run_qwen2_5_omni(question: str, audio_count: int):
     model_name = "Qwen/Qwen2.5-Omni-7B"
@@ -359,6 +395,7 @@ model_example_map = {
     "qwen2_5_omni": run_qwen2_5_omni,
     "ultravox": run_ultravox,
     "whisper": run_whisper,
+    "kimi_audio": run_kimi_audio,
 }
 
 
