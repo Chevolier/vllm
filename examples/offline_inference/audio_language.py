@@ -297,6 +297,7 @@ def run_kimi_audio(question: str, audio_count: int) -> ModelRequestData:
         max_num_seqs=5,
         limit_mm_per_prompt={"audio": 1},
         trust_remote_code=True,
+        enable_prefix_caching=False,
     )
 
     return ModelRequestData(

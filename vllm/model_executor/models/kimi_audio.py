@@ -29,7 +29,7 @@ from ...transformers_utils.configs import KimiAudioConfig
 from ...transformers_utils.processors import KimiAudioProcessor, WhisperEncoder
 from .interfaces import MultiModalEmbeddings, SupportsMultiModal, SupportsPP
 from .moonaudio import MoonshotKimiaModel
-from .utils import AutoWeightsLoader, maybe_prefix, WeightsMapper
+from .utils import AutoWeightsLoader, maybe_prefix, WeightsMapper, _flatten_embeddings
 
 
 class KimiAudioMultiModalProjector(nn.Module):
@@ -376,9 +376,13 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
         return processed_features
 
     def _merge_multimodal_embeddings(
-            self, inputs_embeds: torch.Tensor,
-            audio_emb: MultiModalEmbeddings) -> torch.Tensor:
-        inputs_embeds += audio_emb[0]
+        self,
+        inputs_embeds: torch.Tensor,
+        is_multimodal: torch.Tensor,
+        multimodal_embeddings: NestedTensors,
+    ) -> torch.Tensor:
+        flattened = _flatten_embeddings(multimodal_embeddings)
+        inputs_embeds[is_multimodal] += flattened.to(dtype=inputs_embeds.dtype)
         return inputs_embeds
 
     def get_input_embeddings(
@@ -386,13 +390,21 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
         input_ids: torch.Tensor,
         multimodal_embeddings: Optional[MultiModalEmbeddings] = None,
     ) -> torch.Tensor:
-        inputs_embeds = self.language_model.get_input_embeddings(input_ids)
+        text_input_ids = input_ids.clone()
+        text_input_ids[text_input_ids == 151650] = 151666
+        inputs_embeds = self.language_model.get_input_embeddings(text_input_ids)
 
         if multimodal_embeddings is not None and \
             len(multimodal_embeddings) != 0:
             # customized merge
+            start_indices = (input_ids == 151670).nonzero(as_tuple=True)[0]
+            end_indices = (input_ids == 151671).nonzero(as_tuple=True)[0]
+            mask = torch.zeros_like(input_ids, dtype=torch.bool)
+            for start, end in zip(start_indices, end_indices):
+                mask[start:end+1] = True
             inputs_embeds = self._merge_multimodal_embeddings(
                 inputs_embeds,
+                mask,
                 multimodal_embeddings,
             )
 
