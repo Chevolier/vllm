@@ -272,7 +272,7 @@ def run_qwen2_audio(question: str, audio_count: int) -> ModelRequestData:
 
 
 def run_kimi_audio(question: str, audio_count: int) -> ModelRequestData:
-    model_name = "moonshotai/Kimi-Audio-7B-Instruct"
+    model_name = "agora_sos_models/finetuned_hf_for_inference_8_1000"
 
     assert audio_count == 1
 
@@ -284,7 +284,7 @@ def run_kimi_audio(question: str, audio_count: int) -> ModelRequestData:
     # import librosa
     # audio_asset_private = librosa.load("asr_example.wav", sr=16000)[0]
     messages = [
-        {"role": "user", "message_type": "text", "content": "请将音频内容转换为文字。"},
+        {"role": "user", "message_type": "text", "content": "请识别电话沟通场景中如下声音片段的话轮转换意图，判断该片段是否包含明确的开始说话信号。请区分以下两种情况：若检测到清晰语音起始或强烈发言意愿（如语句开头、语气转折），应回复<是>；若仅含附和词（如\"嗯\"、\"yeah\"）、非语言声音（如喷嚏、咳嗽、笑声）、噪声或近似静默等非打断性信号，应回复<否>"},
         {"role": "user", "message_type": "audio", "content": audio_assets[0].audio_and_sample_rate[0]}
     ]
     prompts = processor.get_prompt(messages, output_type="text")
