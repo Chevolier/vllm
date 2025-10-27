@@ -366,14 +366,43 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
     def get_language_model(self) -> torch.nn.Module:
         return self.language_model
 
+    # def get_multimodal_embeddings(
+    #         self, **kwargs: object) -> Union[MultiModalEmbeddings, None]:
+    #     audio_input = self._parse_and_validate_audio_input(**kwargs)
+    #     if audio_input is None:
+    #         return None
+
+    #     processed_features = self._process_audio_input(audio_input)
+    #     return processed_features
+
     def get_multimodal_embeddings(
             self, **kwargs: object) -> Union[MultiModalEmbeddings, None]:
-        audio_input = self._parse_and_validate_audio_input(**kwargs)
-        if audio_input is None:
-            return None
+        audio_input_ids = kwargs.pop('audio_input_ids', None)
+        is_continuous_mask = kwargs.pop('is_continuous_mask', None)
+        whisper_input_feature = kwargs.pop('whisper_input_feature', None)
 
-        processed_features = self._process_audio_input(audio_input)
-        return processed_features
+        if isinstance(audio_input_ids, torch.Tensor):
+            assert isinstance(is_continuous_mask, torch.Tensor)
+            assert isinstance(whisper_input_feature, torch.Tensor)
+            audio_input_ids = torch.concat(list(audio_input_ids))
+            is_continuous_mask = torch.concat(list(is_continuous_mask))
+            whisper_input_feature = torch.concat(list(whisper_input_feature))
+            audio_input = KimiAudioInputs(
+                audio_input_ids=audio_input_ids,
+                is_continuous_mask=is_continuous_mask,
+                whisper_input_feature=whisper_input_feature,
+            )
+            return self._process_audio_input(audio_input)
+        else:
+            audio_embeddings = []
+            for i in range(len(audio_input_ids)):
+                audio_input = KimiAudioInputs(
+                    audio_input_ids=audio_input_ids[i],
+                    is_continuous_mask=is_continuous_mask[i],
+                    whisper_input_feature=whisper_input_feature[i],
+                )
+                audio_embeddings.append(self._process_audio_input(audio_input)[0])
+            return audio_embeddings
 
     def _merge_multimodal_embeddings(
         self,
