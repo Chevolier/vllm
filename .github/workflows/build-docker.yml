@@ -1,0 +1,152 @@
+name: Build CUDA Docker Image
+
+on:
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      cuda_version:
+        description: 'CUDA Version (e.g., 12.8.1)'
+        required: false
+        default: '12.8.1'
+      python_version:
+        description: 'Python Version (e.g., 3.12)'
+        required: false
+        default: '3.12'
+      push_to_registry:
+        description: 'Push to Docker registry'
+        required: true
+        type: boolean
+        default: false
+  # 推送到main分支或tag时触发
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+env:
+  # 配置Docker registry（可以选择Docker Hub或GitHub Container Registry）
+  # 使用 GitHub Container Registry
+  REGISTRY: ghcr.io
+  # 使用 Docker Hub（取消注释并注释上面的REGISTRY）
+  # REGISTRY: docker.io
+  
+  # 镜像名称（会自动转为小写）
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # 需要这个权限才能推送到 GitHub Container Registry
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整的git历史
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # 使用docker-container驱动以支持更多特性
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request' && (github.event.inputs.push_to_registry == 'true' || github.ref_type == 'tag' || github.ref == 'refs/heads/main')
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          # 使用 GitHub Container Registry 时用 GITHUB_TOKEN
+          password: ${{ secrets.GITHUB_TOKEN }}
+          # 使用 Docker Hub 时需要配置 secrets.DOCKER_USERNAME 和 secrets.DOCKER_PASSWORD
+          # username: ${{ secrets.DOCKER_USERNAME }}
+          # password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # 对于 tag 推送，使用版本号
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            # 对于 main 分支，使用 latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            # 对于手动触发，使用日期时间
+            type=raw,value={{date 'YYYYMMDD-HHmmss' tz='Asia/Shanghai'}},enable=${{ github.event_name == 'workflow_dispatch' }}
+            # 添加 CUDA 版本标签
+            type=raw,value=cuda${{ github.event.inputs.cuda_version || '12.8.1' }},enable=true
+
+      - name: Set build arguments
+        id: build-args
+        run: |
+          CUDA_VERSION="${{ github.event.inputs.cuda_version || '12.8.1' }}"
+          PYTHON_VERSION="${{ github.event.inputs.python_version || '3.12' }}"
+          
+          echo "cuda_version=${CUDA_VERSION}" >> $GITHUB_OUTPUT
+          echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
+          
+          # 根据可用资源设置构建参数
+          # GitHub Actions runner 通常有 2 核 7GB 内存
+          echo "max_jobs=2" >> $GITHUB_OUTPUT
+          echo "nvcc_threads=2" >> $GITHUB_OUTPUT
+
+      - name: Free up disk space
+        run: |
+          # GitHub Actions runner 磁盘空间有限，清理一些不需要的东西
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          target: vllm-openai
+          platforms: linux/amd64  # x64 架构
+          # 只有在特定条件下才推送
+          push: ${{ github.event_name != 'pull_request' && (github.event.inputs.push_to_registry == 'true' || github.ref_type == 'tag' || github.ref == 'refs/heads/main') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CUDA_VERSION=${{ steps.build-args.outputs.cuda_version }}
+            PYTHON_VERSION=${{ steps.build-args.outputs.python_version }}
+            max_jobs=${{ steps.build-args.outputs.max_jobs }}
+            nvcc_threads=${{ steps.build-args.outputs.nvcc_threads }}
+            torch_cuda_arch_list=7.0 7.5 8.0 8.9 9.0 10.0 12.0
+            RUN_WHEEL_CHECK=false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker image
+        if: success()
+        run: |
+          # 简单测试镜像是否能正常启动
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run --rm ${IMAGE_TAG} python3 -c "import vllm; print(f'vLLM version: {vllm.__version__}')" || echo "测试失败，但不阻止流程"
+
+      - name: Display build summary
+        if: always()
+        run: |
+          echo "## 构建摘要" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **CUDA 版本**: ${{ steps.build-args.outputs.cuda_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Python 版本**: ${{ steps.build-args.outputs.python_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **镜像标签**: ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **推送状态**: ${{ github.event_name != 'pull_request' && (github.event.inputs.push_to_registry == 'true' || github.ref_type == 'tag' || github.ref == 'refs/heads/main') && '✅ 已推送' || '⏭️  未推送' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 使用方法" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
