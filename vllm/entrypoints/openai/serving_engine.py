@@ -33,6 +33,7 @@ from vllm.entrypoints.chat_utils import (ChatCompletionMessageParam,
                                          ConversationMessage,
                                          apply_hf_chat_template,
                                          apply_mistral_chat_template,
+                                         apply_kimi_chat_template,
                                          parse_chat_messages_futures,
                                          resolve_chat_template_content_format)
 from vllm.entrypoints.context import ConversationContext
@@ -882,10 +883,19 @@ class OpenAIServing:
         )
         _chat_template_kwargs.update(chat_template_kwargs or {})
 
+        mm_data = await mm_data_future
+
         request_prompt: Union[str, list[int]]
 
         if tokenizer is None:
             request_prompt = "placeholder"
+        elif hasattr(tokenizer, "model"):
+            request_prompt = apply_kimi_chat_template(
+                tokenizer,
+                messages=messages,
+                mm_data=mm_data,
+                **_chat_template_kwargs,
+            )
         elif isinstance(tokenizer, MistralTokenizer):
             request_prompt = apply_mistral_chat_template(
                 tokenizer,
@@ -899,8 +909,6 @@ class OpenAIServing:
                 model_config=model_config,
                 **_chat_template_kwargs,
             )
-
-        mm_data = await mm_data_future
 
         # tool parsing is done only if a tool_parser has been set and if
         # tool_choice is not "none" (if tool_choice is "none" but a tool_parser

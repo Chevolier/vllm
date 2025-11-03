@@ -493,6 +493,7 @@ def resolve_chat_template_content_format(
     *,
     model_config: ModelConfig,
 ) -> _ChatTemplateContentFormat:
+    return "openai"
     if given_format != "auto":
         return given_format
 
@@ -1344,6 +1345,28 @@ def apply_mistral_chat_template(
             "An error occurred in `mistral_common` while applying chat "
             "template")
         raise ValueError(str(e)) from e
+
+def apply_kimi_chat_template(
+    tokenizer: AnyTokenizer,
+    messages: list[ChatCompletionMessageParam],
+    mm_data,
+    chat_template: Optional[str],
+    tools: Optional[list[dict[str, Any]]],
+    **kwargs: Any,
+) -> list[int]:
+    # from transformers import AutoTokenizer
+    from vllm.transformers_utils.processors import KimiAudioProcessor
+    # tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    processor = KimiAudioProcessor(text_tokenizer=tokenizer)
+
+    assert len(messages) == 1
+    msgs = [
+        {"role": "user", "message_type": "text", "content": messages[0]['content'][0]['text']},
+        {"role": "user", "message_type": "audio", "content": mm_data['audio'][0][0]}
+    ]
+    prompts = processor.get_prompt(msgs, output_type="text")
+    return prompts.get("prompt_token_ids")[0]
+
 
 def random_tool_call_id() -> str:
     return f"chatcmpl-tool-{random_uuid()}"
