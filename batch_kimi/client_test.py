@@ -141,6 +141,7 @@ class SOSBenchmark:
             "stream": False,
             "temperature": 0.0,
             "top_k": 1,
+            "max_tokens": 1,
             "repetition_penalty": 1.0,
             "stop_token_ids": [151667],
         }
@@ -253,6 +254,7 @@ class SOSBenchmark:
             "stream": False,
             "temperature": 0.0,
             "top_k": 1,
+            "max_tokens": 1,
             "repetition_penalty": 1.0,
             "stop_token_ids": [151667],
         }
