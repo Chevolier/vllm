@@ -96,8 +96,7 @@ class SOSBenchmark:
             return True
         
         # 否则从本地文件加载
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        audio_file_path = os.path.join(script_dir, self.config.audio_file)
+        audio_file_path = self.config.audio_file
 
         if not os.path.exists(audio_file_path):
             print(f"❌ 音频文件不存在: {audio_file_path}")

@@ -1119,6 +1119,7 @@ class Glm4Tokenizer(nn.Module):
         if self.whisper_model is None:
             self.whisper_model = WhisperVQEncoder.from_pretrained(
                 self.tokenizer_path).eval()
+            self.whisper_model.to(torch.cuda.current_device())
         if self.feature_extractor is None:
             self.feature_extractor = WhisperFeatureExtractor.from_pretrained(
                 self.tokenizer_path)

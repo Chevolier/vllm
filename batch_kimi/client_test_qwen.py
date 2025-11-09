@@ -71,8 +71,7 @@ class SOSBenchmark:
 
     def load_audio_data(self) -> bool:
         """加载音频数据并准备测试数据"""
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        audio_file_path = os.path.join(script_dir, self.config.audio_file)
+        audio_file_path = self.config.audio_file
 
         if not os.path.exists(audio_file_path):
             print(f"❌ 音频文件不存在: {audio_file_path}")
