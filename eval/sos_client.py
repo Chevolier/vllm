@@ -1,0 +1,245 @@
+import os
+import copy
+import asyncio
+import aiohttp
+import base64
+import time
+import json
+import math
+import random
+
+import numpy as np
+from typing import List, Optional
+from dataclasses import dataclass
+from statistics import mean, median
+from tqdm import tqdm
+
+random.seed(42)
+
+PAYLOAD = {
+    "model": "agora_sos_models/finetuned_hf_for_inference_8_1000",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "请识别电话沟通场景中如下声音片段的话轮转换意图，判断该片段是否包含明确的开始说话信号。请区分以下两种情况：若检测到清晰语音起始或强烈发言意愿（如语句开头、语气转折），应回复<是>；若仅含附和词（如\"嗯\"、\"yeah\"）、非语言声音（如喷嚏、咳嗽、笑声）、噪声或近似静默等非打断性信号，应回复<否>"
+                },
+                {
+                    "type": "audio_url",
+                    "audio_url": {"url": None},
+                }
+            ]
+        }
+    ],
+    "stream": False,
+    "temperature": 0.0,
+    "top_k": 1,
+    "repetition_penalty": 1.0,
+    "max_completion_tokens": 1,
+    "logprobs": True,
+    "top_logprobs": 5,
+    "stop_token_ids": [151667],
+}
+
+HEADERS = {
+    "Content-Type": "application/json",
+}
+
+
+async def kick_model(input_audios, concurrence):
+    sos_client = SOSClient()
+
+    model_outputs = await sos_client(input_audios, concurrence)
+    return model_outputs
+
+
+def response_to_prob(response):
+    data = json.loads(response)
+    logprobs = data["choices"][0]["logprobs"]['content'][0]["top_logprobs"]
+    probs = [math.exp(logprob) for logprob in [item['logprob'] for item in logprobs]]
+    probs_norm = [prob / sum(probs) for prob in probs]
+    tokens = [item['token'] for item in logprobs]
+    probs = dict(zip(tokens, probs_norm))
+    if "是" in probs:
+        return probs["是"]
+    else:
+        assert False
+        return 0.0
+
+
+def encode_pcm(pcm):
+    audio_b64 = base64.b64encode(pcm.tobytes()).decode("utf-8")
+    return f"data:audio/pcm;base64,{audio_b64}"
+
+
+def distribute_audios(input_audios, division):
+    input_audios_sorted = sorted(input_audios, key=lambda x: len(x[1]))
+    audios = []
+    for idx in range(division):
+        input_audios_selected = input_audios_sorted[idx::division]
+        random.shuffle(input_audios_selected)
+        audios.append([(item[0], encode_pcm(item[1])) for item in input_audios_selected])
+    assert sum([len(item) for item in audios]) == len(input_audios)
+    return audios
+
+
+def print_results(results, concurrence, start_time, end_time):
+    num_requests = len(results)
+    assert num_requests == sum(1 for r in results if r.success)
+    latencies = [r.latency for r in results if r.success]
+
+    total_duration = end_time - start_time
+    requests_per_second = num_requests / total_duration
+
+    print("\n" + "=" * 60)
+    print("📊 基准测试结果")
+    print("=" * 60)
+    print(f"并发数:             {concurrence}")
+    print(f"总请求数:           {num_requests}")
+    print(f"测试总时长:         {total_duration:.2f}s")
+    print(f"请求速率:           {requests_per_second:.2f} req/s")
+
+    if latencies:
+        print(f"\n⏱️  延迟统计:")
+        print(f"平均延迟:           {mean(latencies)*1000:.2f}ms")
+        print(f"中位延迟:           {median(latencies)*1000:.2f}ms")
+        print(f"最小延迟:           {min(latencies)*1000:.2f}ms")
+        print(f"最大延迟:           {max(latencies)*1000:.2f}ms")
+
+        sorted_latencies = sorted(latencies)
+        p95_idx = int(len(sorted_latencies) * 0.95)
+        p99_idx = int(len(sorted_latencies) * 0.99)
+        if p95_idx < len(sorted_latencies):
+            print(f"95%延迟:            {sorted_latencies[p95_idx]*1000:.2f}ms")
+        if p99_idx < len(sorted_latencies):
+            print(f"99%延迟:            {sorted_latencies[p99_idx]*1000:.2f}ms")
+
+    print("=" * 60)
+
+
+@dataclass
+class SOSClientConfig:
+    url: str = "http://localhost:8000/v1/chat/completions"
+    timeout: int = 30
+
+
+@dataclass
+class RequestResult:
+    identity: str
+    success: bool
+    error: Optional[str]
+    response: Optional[str]
+    latency: float
+
+
+class SOSClient:
+    def __init__(self, config: SOSClientConfig=SOSClientConfig()):
+        self.config = config
+
+    async def send_req(
+        self, session: aiohttp.ClientSession, audio
+    ) -> RequestResult:
+        payload = copy.deepcopy(PAYLOAD)
+        payload["messages"][0]["content"][1]["audio_url"]["url"] = audio[1]
+
+        start_time = time.perf_counter()
+        try:
+            async with session.post(
+                self.config.url,
+                json=payload,
+                headers=HEADERS,
+                timeout=aiohttp.ClientTimeout(total=self.config.timeout),
+            ) as response:
+                response_text = await response.text()
+                latency = time.perf_counter() - start_time
+                delay = (int)(latency * 1000)
+                # print(f"{audio[0]}: delay {delay}ms")
+                self.latencies.append(delay)
+                if len(self.latencies) % 10 == 0:
+                    print(f"<STATISTICS> process {os.getpid()} average latency {int(np.mean(self.latencies))}ms\n")
+
+                if response.status == 200:
+                    return RequestResult(
+                        identity=audio[0],
+                        success=True,
+                        error=None,
+                        response=response_text,
+                        latency=latency,
+                    )
+                else:
+                    print(f"HTTP error {response.status}")
+                    assert False
+                    return RequestResult(
+                        identity=audio[0],
+                        success=False,
+                        error=f"HTTP {response.status}: {response_text}",
+                        response=None,
+                        latency=latency,
+                    )
+
+        except Exception as e:
+            print(f"exception {str(e)}")
+            assert False
+            latency = time.perf_counter() - start_time
+            return RequestResult(
+                identity=audio[0],
+                success=False,
+                error=str(e),
+                response=None,
+                latency=latency,
+            )
+
+    async def worker(
+        self, session: aiohttp.ClientSession, audios: list
+    ) -> List[RequestResult]:
+        request_results = []
+
+        # for idx in range(len(audios)):
+        for idx in tqdm(range(len(audios))):
+            result = await self.send_req(session, audios[idx])
+            request_results.append(result)
+
+        return request_results
+
+    async def __call__(self, audios, concurrence=1) -> bool:
+        self.latencies = []
+        input_audios = distribute_audios(audios, concurrence)
+        results = []
+
+        connector = aiohttp.TCPConnector(
+            limit=concurrence * 2,
+            limit_per_host=concurrence,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+            enable_cleanup_closed=True,
+        )
+        timeout = aiohttp.ClientTimeout(
+            total=self.config.timeout, connect=10, sock_read=self.config.timeout
+        )
+
+        start_time = time.perf_counter()
+        async with aiohttp.ClientSession(
+            connector=connector, timeout=timeout, connector_owner=True
+        ) as session:
+            tasks = []
+            for worker_id in range(concurrence):
+                task = asyncio.create_task(
+                    self.worker(session, input_audios[worker_id])
+                )
+                tasks.append(task)
+            print("⏳ 执行测试中...")
+            worker_results = await asyncio.gather(*tasks, return_exceptions=True)
+        end_time = time.perf_counter()
+
+        for worker_result in worker_results:
+            if isinstance(worker_result, Exception):
+                print(f"exception in results")
+                assert False
+                continue
+            results.extend(worker_result)
+        assert len(results) == len(audios)
+
+        print_results(results, concurrence, start_time, end_time)
+        return results
