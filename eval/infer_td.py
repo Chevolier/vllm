@@ -135,7 +135,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--wav_path", type=str, required=True)
     parser.add_argument("--eval_file", type=str, required=True)
-    parser.add_argument("--concurrence", type=int, required=True)
+    parser.add_argument("--concurrence", type=int, default=1)
     parser.add_argument('--thresh', type=float, default=None)
     parser.add_argument("--output_path", type=str, default="eval/eval")
     parser.add_argument("--debug", type=int, default=None)
@@ -201,6 +201,8 @@ if __name__ == "__main__":
         probs = [response_to_prob(item.response) for item in model_output]
         res["probs"] = probs
         res["latency"] = int(np.mean([item.latency for item in model_output]) * 1000)
+    results = [{'file': item['file'], 'latency': item['latency'], **{k: v for k, v in item.items() if k not in ['file', 'latency']}} for item in results]
+
 
     stats_streaming_fname = os.path.join(output_path, model_path.split("/")[-1] + f"_{testset_name}_stats_streaming.csv")
     stats_utterance_fname = os.path.join(output_path, model_path.split("/")[-1] + f"_{testset_name}_stats_utterance.csv")
