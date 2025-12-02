@@ -381,28 +381,15 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
         is_continuous_mask = kwargs.pop('is_continuous_mask', None)
         whisper_input_feature = kwargs.pop('whisper_input_feature', None)
 
-        if isinstance(audio_input_ids, torch.Tensor):
-            assert isinstance(is_continuous_mask, torch.Tensor)
-            assert isinstance(whisper_input_feature, torch.Tensor)
-            audio_input_ids = torch.concat(list(audio_input_ids))
-            is_continuous_mask = torch.concat(list(is_continuous_mask))
-            whisper_input_feature = torch.concat(list(whisper_input_feature))
+        audio_embeddings = []
+        for i in range(len(audio_input_ids)):
             audio_input = KimiAudioInputs(
-                audio_input_ids=audio_input_ids,
-                is_continuous_mask=is_continuous_mask,
-                whisper_input_feature=whisper_input_feature,
+                audio_input_ids=audio_input_ids[i],
+                is_continuous_mask=is_continuous_mask[i],
+                whisper_input_feature=whisper_input_feature[i],
             )
-            return self._process_audio_input(audio_input)
-        else:
-            audio_embeddings = []
-            for i in range(len(audio_input_ids)):
-                audio_input = KimiAudioInputs(
-                    audio_input_ids=audio_input_ids[i],
-                    is_continuous_mask=is_continuous_mask[i],
-                    whisper_input_feature=whisper_input_feature[i],
-                )
-                audio_embeddings.append(self._process_audio_input(audio_input)[0])
-            return audio_embeddings
+            audio_embeddings.append(self._process_audio_input(audio_input)[0])
+        return audio_embeddings
 
     def _merge_multimodal_embeddings(
         self,
