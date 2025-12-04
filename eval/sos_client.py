@@ -13,18 +13,26 @@ from typing import List, Optional
 from dataclasses import dataclass
 from statistics import mean, median
 from tqdm import tqdm
+from enum import Enum
 
 random.seed(42)
 
+class SOS_TOKEN(Enum):
+    YES = "是"
+    NO = "否"
+    NOISE = "1"
+    BC = "2"
+    SPEECH = "3"
+
 PAYLOAD = {
-    "model": "agora_sos_models/finetuned_hf_for_inference_8_1000",
+    "model": None,
     "messages": [
         {
             "role": "user",
             "content": [
                 {
                     "type": "text",
-                    "text": "请识别电话沟通场景中如下声音片段的话轮转换意图，判断该片段是否包含明确的开始说话信号。请区分以下两种情况：若检测到清晰语音起始或强烈发言意愿（如语句开头、语气转折），应回复<是>；若仅含附和词（如\"嗯\"、\"yeah\"）、非语言声音（如喷嚏、咳嗽、笑声）、噪声或近似静默等非打断性信号，应回复<否>"
+                    "text": None,
                 },
                 {
                     "type": "audio_url",
@@ -47,26 +55,31 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
+prompts = {
+    "binary": "请识别电话沟通场景中如下声音片段的话轮转换意图，判断该片段是否包含明确的开始说话信号。请区分以下两种情况：若检测到清晰语音起始或强烈发言意愿（如语句开头、语气转折），应回复<是>；若仅含附和词（如\"嗯\"、\"yeah\"）、非语言声音（如喷嚏、咳嗽、笑声）、噪声或近似静默等非打断性信号，应回复<否>",
+    "multi": "请识别电话沟通场景中如下声音片段的类别。若检测到清晰语音起始或强烈发言意愿（如语句开头、语气转折），应回复<3>；否则若含附和词（如\"嗯\"、\"yeah\"），应回复<2>；除1、2外的所有其他情况如非语言声音（如喷嚏、咳嗽、笑声）、噪声或近似静默等非打断性信号，应回复<1>",
+}
 
-async def kick_model(input_audios, concurrence):
+async def kick_model(model_path, input_audios, concurrence):
+    PAYLOAD["model"] = model_path
+    model_seq = int(os.path.split(model_path)[-1].split('_')[-2])
+    model_type = "binary" if model_seq <= 8 else "multi"
+    assert model_type in ["binary", "multi"]
+    PAYLOAD["messages"][0]["content"][0]["text"] = prompts[model_type]
     sos_client = SOSClient()
 
     model_outputs = await sos_client(input_audios, concurrence)
     return model_outputs
 
 
-def response_to_prob(response):
+def response_to_probs(response):
     data = json.loads(response)
     logprobs = data["choices"][0]["logprobs"]['content'][0]["top_logprobs"]
     probs = [math.exp(logprob) for logprob in [item['logprob'] for item in logprobs]]
     probs_norm = [prob / sum(probs) for prob in probs]
     tokens = [item['token'] for item in logprobs]
     probs = dict(zip(tokens, probs_norm))
-    if "是" in probs:
-        return probs["是"]
-    else:
-        assert False
-        return 0.0
+    return probs
 
 
 def encode_pcm(pcm):
@@ -131,6 +144,7 @@ class RequestResult:
     success: bool
     error: Optional[str]
     response: Optional[str]
+    probs: Optional[dict]
     latency: float
 
 
@@ -166,6 +180,7 @@ class SOSClient:
                         success=True,
                         error=None,
                         response=response_text,
+                        probs=response_to_probs(response_text),
                         latency=latency,
                     )
                 else:

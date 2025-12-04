@@ -93,24 +93,24 @@ def plot(filepath):
     plt.savefig(os.path.join(dir, f'{fname}.png'), dpi=300)
     plt.show()
 
-def plot2(filepath):
+def plot2(filepath, tag):
     dir, fname = os.path.split(filepath)
-    wildcard = os.path.join(dir, f"{fname[:-27]}*streaming*")
+    wildcard = os.path.join(dir, f"{'_'.join(fname.split('_')[:6])}*streaming*")
     print(f"plot2 wildcard {wildcard}")
     files = glob.glob(wildcard)
     files.sort()
     if len(files) < 5:
+        print("no enough data")
         return
     assert len(files) == 5
     base, _ = os.path.splitext(files[0])
     begin_idx = base.find("inference_") + len("inference_")
-    end_idx = begin_idx + 6
+    end_idx = begin_idx + 7
     if base[end_idx] != "_":
         end_idx -= 1
     model_step = base[begin_idx:end_idx].split("_")
-    if len(model_step[1]) == 3:
-        model_step[1] = "0" + model_step[1]
-    fname = "model_" + "_".join(model_step)
+    assert len(model_step[1]) == 4
+    fname = "model_" + "_".join(model_step) + f" ({tag})"
 
     fig, axes = plt.subplots(len(files), 2, figsize=(20, 20))
     fig.suptitle(f'{fname}', fontsize=16)
