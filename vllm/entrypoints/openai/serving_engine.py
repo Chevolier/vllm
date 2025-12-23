@@ -890,12 +890,17 @@ class OpenAIServing:
         if tokenizer is None:
             request_prompt = "placeholder"
         elif hasattr(tokenizer, "model"):
-            request_prompt = apply_kimi_chat_template(
+            logger.debug("Calling apply_kimi_chat_template...")
+            request_prompt, kimi_mm_data = apply_kimi_chat_template(
                 tokenizer,
                 messages=messages,
                 mm_data=mm_data,
                 **_chat_template_kwargs,
             )
+            logger.debug(f"apply_kimi_chat_template returned {len(request_prompt)} tokens")
+            # Use mm_data from KimiAudioProcessor (contains processed audio waveforms)
+            mm_data = kimi_mm_data
+            logger.debug(f"Using kimi_mm_data, keys: {list(mm_data.keys()) if mm_data else None}")
         elif isinstance(tokenizer, MistralTokenizer):
             request_prompt = apply_mistral_chat_template(
                 tokenizer,
@@ -940,16 +945,27 @@ class OpenAIServing:
                 add_special_tokens=add_special_tokens,
             )
         else:
-            # For MistralTokenizer
+            # For MistralTokenizer / KimiTokenizer
+            logger.debug(f"request_prompt is list of ints, length={len(request_prompt)}")
             assert is_list_of(request_prompt, int), (
                 "Prompt has to be either a string or a list of token ids")
+            logger.debug("Decoding request_prompt...")
+            try:
+                decoded_prompt = tokenizer.decode(request_prompt)
+                logger.debug(f"Decoded prompt length: {len(decoded_prompt)}")
+            except Exception as e:
+                logger.error(f"Error decoding prompt: {e}", exc_info=True)
+                raise
             prompt_inputs = TextTokensPrompt(
-                prompt=tokenizer.decode(request_prompt),
+                prompt=decoded_prompt,
                 prompt_token_ids=request_prompt)
+            logger.debug("TextTokensPrompt created successfully")
 
+        logger.debug("Creating EngineTokensPrompt...")
         engine_prompt = EngineTokensPrompt(
             prompt_token_ids=prompt_inputs["prompt_token_ids"])
         if mm_data is not None:
+            logger.debug(f"Adding mm_data to engine_prompt, keys: {list(mm_data.keys())}")
             engine_prompt["multi_modal_data"] = mm_data
         if request.mm_processor_kwargs is not None:
             engine_prompt["mm_processor_kwargs"] = request.mm_processor_kwargs
@@ -957,6 +973,7 @@ class OpenAIServing:
         if hasattr(request, "cache_salt") and request.cache_salt is not None:
             engine_prompt["cache_salt"] = request.cache_salt
 
+        logger.debug("_preprocess_chat returning successfully")
         return conversation, [request_prompt], [engine_prompt]
 
     async def _generate_with_builtin_tools(

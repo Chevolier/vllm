@@ -64,9 +64,25 @@ def convert_prompt_ids_to_tokens(
     """
     # We do not need to convert the whole prompt to tokens.
     # Offset a little more in case we have special tokens.
-    new_tokens = tokenizer.convert_ids_to_tokens(
-        prompt_ids[-INITIAL_INCREMENTAL_DETOKENIZATION_OFFSET - 2:],
-        skip_special_tokens=skip_special_tokens)
+    ids_to_convert = prompt_ids[-INITIAL_INCREMENTAL_DETOKENIZATION_OFFSET - 2:]
+
+    try:
+        new_tokens = tokenizer.convert_ids_to_tokens(
+            ids_to_convert,
+            skip_special_tokens=skip_special_tokens)
+    except NotImplementedError:
+        # Fallback for tokenizers that don't implement _convert_id_to_token
+        # (e.g., Kimi tokenizers). Use decode for each token.
+        new_tokens = []
+        vocab = tokenizer.get_vocab() if hasattr(tokenizer, 'get_vocab') else {}
+        id_to_token = {v: k for k, v in vocab.items()}
+        for token_id in ids_to_convert:
+            token = id_to_token.get(token_id)
+            if token is None:
+                # Fallback: decode the single token
+                token = tokenizer.decode([token_id])
+            new_tokens.append(token)
+
     read_offset = len(new_tokens)
     prefix_offset = max(
         read_offset - INITIAL_INCREMENTAL_DETOKENIZATION_OFFSET, 0)
@@ -149,8 +165,12 @@ def detokenize_incrementally(
     # If the new token id is out of bounds, return an empty string.
     if 0 <= new_token_id < len(tokenizer):
         # Put new_token_id in a list so skip_special_tokens is respected
-        new_tokens = tokenizer.convert_ids_to_tokens(
-            [new_token_id], skip_special_tokens=skip_special_tokens)
+        try:
+            new_tokens = tokenizer.convert_ids_to_tokens(
+                [new_token_id], skip_special_tokens=skip_special_tokens)
+        except NotImplementedError:
+            # Fallback for tokenizers that don't implement _convert_id_to_token
+            new_tokens = [tokenizer.decode([new_token_id])]
         if isinstance(new_tokens, str):
             new_tokens = [new_tokens]
     else:
@@ -164,11 +184,23 @@ def detokenize_incrementally(
     # The prefix text is necessary only to defeat cleanup algorithms in
     # the decode which decide to add a space or not depending on the
     # surrounding ids.
-    if tokenizer.is_fast or not tokenizer.get_added_vocab():
-        prefix_text = tokenizer.convert_tokens_to_string(
-            output_tokens[prefix_offset:read_offset])
-        new_text = tokenizer.convert_tokens_to_string(
-            output_tokens[prefix_offset:])
+    # Some tokenizers (e.g., Kimi) don't implement get_added_vocab properly
+    try:
+        has_added_vocab = tokenizer.get_added_vocab()
+    except AttributeError:
+        has_added_vocab = False
+
+    is_fast = getattr(tokenizer, 'is_fast', False)
+    if is_fast or not has_added_vocab:
+        try:
+            prefix_text = tokenizer.convert_tokens_to_string(
+                output_tokens[prefix_offset:read_offset])
+            new_text = tokenizer.convert_tokens_to_string(
+                output_tokens[prefix_offset:])
+        except (NotImplementedError, AttributeError):
+            # Fallback for tokenizers without convert_tokens_to_string
+            prefix_text = "".join(output_tokens[prefix_offset:read_offset])
+            new_text = "".join(output_tokens[prefix_offset:])
     else:
         prefix_text = _convert_tokens_to_string_with_added_encoders(
             tokenizer,

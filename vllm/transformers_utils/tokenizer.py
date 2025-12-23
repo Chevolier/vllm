@@ -51,11 +51,16 @@ def decode_tokens(
     settings.
     """
     decode_method = getattr(tokenizer, "_decode", tokenizer.decode)
-    if skip_special_tokens is not None:
-        return decode_method(token_ids,
-                             skip_special_tokens=skip_special_tokens)
-
-    return decode_method(token_ids)
+    try:
+        if skip_special_tokens is not None:
+            return decode_method(token_ids,
+                                 skip_special_tokens=skip_special_tokens)
+        return decode_method(token_ids)
+    except NotImplementedError:
+        # Fallback for tokenizers that don't implement _convert_id_to_token
+        # (e.g., TikTokenTokenizer) - use decode() directly
+        # Note: skip_special_tokens may not be supported by custom decode()
+        return tokenizer.decode(token_ids)
 
 
 def encode_tokens(
@@ -95,14 +100,19 @@ def get_cached_tokenizer(tokenizer: AnyTokenizer) -> AnyTokenizer:
     """
     cached_tokenizer = copy.copy(tokenizer)
 
-    if hasattr(tokenizer, 'all_special_ids'):
+    # Try to access standard tokenizer attributes. Some custom tokenizers
+    # (e.g., TikTokenTokenizer) inherit from PreTrainedTokenizer but don't
+    # call super().__init__(), so accessing properties like all_special_ids
+    # fails because _added_tokens_decoder is missing.
+    try:
         tokenizer_all_special_ids = tokenizer.all_special_ids
         tokenizer_all_special_tokens = tokenizer.all_special_tokens
         tokenizer_all_special_tokens_extended = (
             tokenizer.all_special_tokens_extended)
         tokenizer_vocab = tokenizer.get_vocab()
         tokenizer_len = len(tokenizer)
-    else:
+    except AttributeError:
+        # Fallback for tokenizers with special_tokens dict (e.g., TikTokenTokenizer)
         tokenizer_all_special_ids = list(tokenizer.special_tokens.values())
         tokenizer_all_special_tokens = list(tokenizer.special_tokens.keys())
         tokenizer_all_special_tokens_extended = list(tokenizer.special_tokens.keys())
@@ -144,6 +154,17 @@ def get_cached_tokenizer(tokenizer: AnyTokenizer) -> AnyTokenizer:
 
         def __reduce__(self):
             return get_cached_tokenizer, (tokenizer, )
+
+        def __getattr__(self, name):
+            # Delegate unknown attributes to the original tokenizer
+            # Handle missing _added_tokens_decoder for tokenizers that don't
+            # properly call super().__init__() (e.g., TikTokenTokenizer)
+            try:
+                return getattr(tokenizer, name)
+            except AttributeError:
+                if name == '_added_tokens_decoder':
+                    return {}
+                raise
 
     CachedTokenizer.__name__ = f"Cached{tokenizer.__class__.__name__}"
 

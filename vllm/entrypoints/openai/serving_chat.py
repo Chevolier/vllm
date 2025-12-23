@@ -245,6 +245,8 @@ class OpenAIServingChat(OpenAIServing):
             logger.exception("Error in preprocessing prompt inputs")
             return self.create_error_response(f"{e} {e.__cause__}")
 
+        logger.debug(f"_preprocess_chat completed, got {len(engine_prompts)} engine_prompts")
+
         request_id = "chatcmpl-" \
                      f"{self._base_request_id(raw_request, request.request_id)}"
 
@@ -283,7 +285,19 @@ class OpenAIServingChat(OpenAIServing):
                 trace_headers = (None if raw_request is None else await
                                  self._get_trace_headers(raw_request.headers))
 
+                logger.debug(f"engine_prompt keys: {list(engine_prompt.keys())}")
+                logger.debug(f"prompt_token_ids length: {len(engine_prompt.get('prompt_token_ids', []))}")
+                if 'multi_modal_data' in engine_prompt:
+                    mm_data = engine_prompt['multi_modal_data']
+                    logger.debug(f"multi_modal_data keys: {list(mm_data.keys()) if mm_data else None}")
+                    for k, v in (mm_data or {}).items():
+                        if isinstance(v, list):
+                            logger.debug(f"  {k}: list of {len(v)} items")
+                        else:
+                            logger.debug(f"  {k}: {type(v)}")
+
                 if isinstance(sampling_params, BeamSearchParams):
+                    logger.debug("Using beam_search")
                     generator = self.engine_client.beam_search(
                         prompt=engine_prompt,
                         request_id=request_id,
@@ -291,6 +305,7 @@ class OpenAIServingChat(OpenAIServing):
                         lora_request=lora_request,
                     )
                 else:
+                    logger.debug("Calling engine_client.generate...")
                     generator = self.engine_client.generate(
                         engine_prompt,
                         sampling_params,
@@ -299,6 +314,7 @@ class OpenAIServingChat(OpenAIServing):
                         trace_headers=trace_headers,
                         priority=request.priority,
                     )
+                    logger.debug("engine_client.generate returned successfully")
 
                 generators.append(generator)
         except ValueError as e:
@@ -321,12 +337,19 @@ class OpenAIServingChat(OpenAIServing):
                 enable_force_include_usage=self.enable_force_include_usage)
 
         try:
-            return await self.chat_completion_full_generator(
+            logger.debug("Calling chat_completion_full_generator...")
+            result = await self.chat_completion_full_generator(
                 request, result_generator, request_id, model_name,
                 conversation, tokenizer, request_metadata)
+            logger.debug("chat_completion_full_generator completed successfully")
+            return result
         except ValueError as e:
+            logger.exception("ValueError in chat_completion_full_generator")
             # TODO: Use a vllm-specific Validation Error
             return self.create_error_response(str(e))
+        except Exception as e:
+            logger.exception("Unexpected error in chat_completion_full_generator")
+            raise
 
     def get_chat_request_role(self, request: ChatCompletionRequest) -> str:
         if request.add_generation_prompt:

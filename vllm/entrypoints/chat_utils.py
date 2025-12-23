@@ -563,9 +563,11 @@ class BaseMultiModalItemTracker(ABC, Generic[_T]):
         input_modality = modality.replace("_embeds", "")
         num_items = len(self._items_by_modality[modality]) + 1
 
+        logger.debug(f"Adding {modality} item #{num_items} to tracker")
         self.mm_processor.validate_num_items(input_modality, num_items)
 
         self._items_by_modality[modality].append(item)
+        logger.debug(f"Successfully added {modality} item, total items: {len(self._items_by_modality[modality])}")
 
         return self.model_cls.get_placeholder_str(modality, num_items)
 
@@ -606,13 +608,16 @@ class MultiModalItemTracker(BaseMultiModalItemTracker[object]):
 class AsyncMultiModalItemTracker(BaseMultiModalItemTracker[Awaitable[object]]):
 
     async def all_mm_data(self) -> Optional[MultiModalDataDict]:
+        logger.debug(f"all_mm_data called, _items_by_modality keys: {list(self._items_by_modality.keys())}")
         if not self._items_by_modality:
+            logger.debug("No items in _items_by_modality, returning None")
             return None
         mm_inputs = {}
         items_by_modality = {
                 modality: await asyncio.gather(*items)
                 for modality, items in self._items_by_modality.items()
             }
+        logger.debug(f"Gathered items_by_modality: {list(items_by_modality.keys())}")
 
         if "image" in items_by_modality and "image_embeds" in items_by_modality:
             raise ValueError(
@@ -1095,6 +1100,7 @@ def _parse_chat_message_content_part(
         return part
     # Handle structured dictionary parts
     part_type, content = _parse_chat_message_content_mm_part(part)
+    logger.debug(f"Parsed part: type={part_type}, content_type={type(content).__name__}, content_is_none={content is None}")
     # if part_type is text/refusal/image_url/audio_url/video_url/input_audio but
     # content is None, log a warning and skip
     if part_type in VALID_MESSAGE_CONTENT_MM_PART_TYPES and content is None:
@@ -1125,10 +1131,12 @@ def _parse_chat_message_content_part(
         modality = "image"
     elif part_type == "audio_url":
         str_content = cast(str, content)
+        logger.debug(f"Parsing audio_url: {str_content[:100]}...")
         mm_parser.parse_audio(str_content)
         modality = "audio"
     elif part_type == "input_audio":
         dict_content = cast(InputAudio, content)
+        logger.debug(f"Parsing input_audio: format={dict_content.get('format')}, data_len={len(dict_content.get('data', ''))}")
         mm_parser.parse_input_audio(dict_content)
         modality = "audio"
     elif part_type == "video_url":
@@ -1353,19 +1361,71 @@ def apply_kimi_chat_template(
     chat_template: Optional[str],
     tools: Optional[list[dict[str, Any]]],
     **kwargs: Any,
-) -> list[int]:
-    # from transformers import AutoTokenizer
+) -> tuple[list[int], Optional[dict]]:
+    """
+    Apply Kimi-Audio chat template.
+
+    Returns:
+        tuple of (prompt_token_ids, multi_modal_data)
+        - prompt_token_ids: list of token ids
+        - multi_modal_data: dict with 'audio' key containing raw audio waveforms
+    """
     from vllm.transformers_utils.processors import KimiAudioProcessor
-    # tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
+    logger.debug(f"apply_kimi_chat_template called, mm_data keys: {list(mm_data.keys()) if mm_data else None}")
+
     processor = KimiAudioProcessor(text_tokenizer=tokenizer)
 
     assert len(messages) == 1
+
+    # Extract text from message content
+    content = messages[0].get('content', [])
+    text_content = None
+    if isinstance(content, str):
+        text_content = content
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get('type') == 'text':
+                text_content = part.get('text', '')
+                break
+    if text_content is None:
+        text_content = ""
+
+    logger.debug(f"Extracted text_content: {text_content[:100]}...")
+
+    # Check if we have audio data
+    if mm_data is None or 'audio' not in mm_data or not mm_data['audio']:
+        raise ValueError(
+            "No audio data found in request. Make sure to include audio "
+            "using 'audio_url' or 'input_audio' content type. "
+            f"mm_data={mm_data}"
+        )
+
+    # mm_data['audio'] is a list of (audio_array, sample_rate) tuples
+    audio_data = mm_data['audio'][0]
+    logger.debug(f"audio_data type: {type(audio_data)}, is_tuple: {isinstance(audio_data, tuple)}")
+    if isinstance(audio_data, tuple):
+        logger.debug(f"audio_data[0] type: {type(audio_data[0])}, shape: {getattr(audio_data[0], 'shape', 'N/A')}")
+        audio_data = audio_data[0]  # Extract just the audio array
+
+    logger.debug(f"Final audio_data type: {type(audio_data)}, shape: {getattr(audio_data, 'shape', 'N/A')}")
+
     msgs = [
-        {"role": "user", "message_type": "text", "content": messages[0]['content'][0]['text']},
-        {"role": "user", "message_type": "audio", "content": mm_data['audio'][0][0]}
+        {"role": "user", "message_type": "text", "content": text_content},
+        {"role": "user", "message_type": "audio", "content": audio_data}
     ]
-    prompts = processor.get_prompt(msgs, output_type="text")
-    return prompts.get("prompt_token_ids")[0]
+
+    logger.debug("Calling processor.get_prompt...")
+    try:
+        prompts = processor.get_prompt(msgs, output_type="text")
+        logger.debug(f"get_prompt returned: {list(prompts.keys())}")
+        prompt_token_ids = prompts.get("prompt_token_ids")[0]
+        kimi_mm_data = prompts.get("multi_modal_data")
+        logger.debug(f"Returning {len(prompt_token_ids)} tokens, mm_data keys: {list(kimi_mm_data.keys()) if kimi_mm_data else None}")
+        return prompt_token_ids, kimi_mm_data
+    except Exception as e:
+        logger.error(f"Error in processor.get_prompt: {e}", exc_info=True)
+        raise
 
 
 def random_tool_call_id() -> str:
