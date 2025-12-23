@@ -172,3 +172,35 @@ If you use vLLM for your research, please cite our [paper](https://arxiv.org/abs
 ## Media Kit
 
 - If you wish to use vLLM's logo, please refer to [our media kit repo](https://github.com/vllm-project/media-kit)
+
+```bash
+uv venv --python 3.12 --seed
+source .venv/bin/activate
+
+uv pip install vllm --torch-backend=auto
+uv pip install flash-attn==2.7.1.post4 --no-build-isolation
+```
+
+Set up using Python-only build (without compilation)¶
+If you only need to change Python code, you can build and install vLLM without compilation. Using uv pip's --editable flag, changes you make to the code will be reflected when you run vLLM:
+
+```bash
+# git clone https://github.com/vllm-project/vllm.git
+# cd vllm
+cd vllm-kimi-audio
+VLLM_USE_PRECOMPILED=1 uv pip install --editable .
+```
+
+```bash
+	--api-key xxx \
+
+vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
+	--served-model-name kimi_audio \
+	--max-model-len 4096 \
+	--max-num-seqs 20 \
+	--limit-mm-per-prompt '{"audio": 1}' \
+	--trust-remote-code \
+	--no-enable-prefix-caching \
+  --gpu-memory-utilization 0.8 \
+  --max-num-batched-tokens 8192
+```
