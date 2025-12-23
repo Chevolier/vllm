@@ -184,6 +184,8 @@ uv pip install flash-attn==2.7.1.post4 --no-build-isolation
 ```bash
 	--api-key xxx \
 
+export VLLM_LOGGING_LEVEL=DEBUG
+
 vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
 	--served-model-name kimi_audio \
 	--max-model-len 4096 \
@@ -193,4 +195,12 @@ vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
 	--no-enable-prefix-caching \
   --gpu-memory-utilization 0.8 \
   --max-num-batched-tokens 8192
+
+python batch_kimi/test_kimi_audio.py \
+      --base-url http://localhost:8000/v1 \
+      --model kimi_audio \
+      --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/asr_example.wav \
+      --prompt "What is being said in this audio?"
+
+python batch_kimi/test_kimi_audio.py --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/asr_example.wav
 ```
