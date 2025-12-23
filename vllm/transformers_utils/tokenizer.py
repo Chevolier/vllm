@@ -87,20 +87,38 @@ def encode_tokens(
     return tokenizer.encode(text, **kw_args)
 
 
-def get_cached_tokenizer(tokenizer: AnyTokenizer) -> AnyTokenizer:
+def get_cached_tokenizer(tokenizer: AnyTokenizer, tokenizer_name: str = '') -> AnyTokenizer:
     """
     By default, transformers will recompute multiple tokenizer properties
     each time they are called, leading to a significant slowdown.
     This proxy caches these properties for faster access.
     """
     cached_tokenizer = copy.copy(tokenizer)
+    print(f"tokenizer_name: {tokenizer_name}")
 
-    tokenizer_all_special_ids = tokenizer.all_special_ids
-    tokenizer_all_special_tokens = tokenizer.all_special_tokens
-    tokenizer_all_special_tokens_extended = (
-        tokenizer.all_special_tokens_extended)
-    tokenizer_vocab = tokenizer.get_vocab()
-    tokenizer_len = len(tokenizer)
+    if tokenizer_name == "TikTokenTokenizer":
+        tokenizer_all_special_ids = list(tokenizer.special_tokens.values())
+        tokenizer_all_special_tokens = list(tokenizer.special_tokens.keys())
+        tokenizer_all_special_tokens_extended = list(tokenizer.special_tokens.keys())
+        tokenizer_vocab = tokenizer.vocab
+        tokenizer_len = tokenizer.vocab_size
+    else:
+        tokenizer_all_special_ids = tokenizer.all_special_ids
+
+        logger.info("Here are the special token IDs %s", tokenizer_all_special_ids)
+
+        tokenizer_all_special_tokens = tokenizer.all_special_tokens
+        tokenizer_all_special_tokens_extended = (
+            tokenizer.all_special_tokens_extended)
+        tokenizer_vocab = tokenizer.get_vocab()
+        tokenizer_len = len(tokenizer)
+
+    # tokenizer_all_special_ids = tokenizer.all_special_ids
+    # tokenizer_all_special_tokens = tokenizer.all_special_tokens
+    # tokenizer_all_special_tokens_extended = (
+    #     tokenizer.all_special_tokens_extended)
+    # tokenizer_vocab = tokenizer.get_vocab()
+    # tokenizer_len = len(tokenizer)
 
     max_token_id = max(tokenizer_vocab.values())
     # Some tokenizers (e.g., QwenTokenizer) have special tokens that
@@ -281,7 +299,8 @@ def get_tokenizer(
             logger.warning(
                 "Using a slow tokenizer. This might cause a significant "
                 "slowdown. Consider using a fast tokenizer instead.")
-        tokenizer = get_cached_tokenizer(tokenizer)
+        
+        tokenizer = get_cached_tokenizer(tokenizer, type(tokenizer).__name__)
 
     return tokenizer
 

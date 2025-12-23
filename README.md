@@ -177,18 +177,8 @@ If you use vLLM for your research, please cite our [paper](https://arxiv.org/abs
 uv venv --python 3.12 --seed
 source .venv/bin/activate
 
-uv pip install vllm --torch-backend=auto
+uv pip install -e .
 uv pip install flash-attn==2.7.1.post4 --no-build-isolation
-```
-
-Set up using Python-only build (without compilation)¶
-If you only need to change Python code, you can build and install vLLM without compilation. Using uv pip's --editable flag, changes you make to the code will be reflected when you run vLLM:
-
-```bash
-# git clone https://github.com/vllm-project/vllm.git
-# cd vllm
-cd vllm-kimi-audio
-VLLM_USE_PRECOMPILED=1 uv pip install --editable .
 ```
 
 ```bash
