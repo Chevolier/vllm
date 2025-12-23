@@ -453,7 +453,7 @@ class KimiAudioProcessor(ProcessorMixin):
         self.kimia_text_audiodelaytokens = kimia_text_audiodelaytokens
         self.kimia_token_offset = kimia_token_offset
         # Just for simple distinguish
-        self.audio_token_id = self.text_tokenizer.encode('<|reserved_token_2|>')[0]
+        self.audio_token_id = self.text_tokenizer.encode('<|reserved_token_2|>', bos=False, eos=False)[0]
 
     def _tokenize_text(self, text: str) -> list[int]:
         if text is None:
