@@ -221,4 +221,6 @@ python batch_kimi/stress_test.py \
       --streaming \
       --output results_200ms_c1.json
 
+# 批量压测
+bash batch_kimi/stress_test.sh
 ```
