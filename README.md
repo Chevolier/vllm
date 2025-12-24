@@ -200,11 +200,20 @@ vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
   --max-num-batched-tokens 8192
 
 #       --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/asr_example.wav \
+
+#       --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/multiturn/case1/multiturn_a1.wav \
 python batch_kimi/test_kimi_audio.py \
       --base-url http://localhost:8000/v1 \
       --model kimi_audio \
-      --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/multiturn/case1/multiturn_a1.wav \
-      --prompt "请将音频内容转换为文字。"
+      --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/asr_example.wav \
+      --prompt "请将音频内容转换为文字。" \
+      --max-tokens 256
+
+
+      --prompt "请识别电话沟通场景中如下声音片段的话轮转换意图，判断该片段是否包含明确的开始说话信号。请区分以下两种情况：若检测到清晰语音起始或强烈发言意愿（如语句开头、语气转折），应回复<是>；若仅含附和词（如\"嗯\"、\"yeah\"）、非语言声音（如喷嚏、咳嗽、笑声）、噪声或近似静默等非打断性信号，应回复<否>"
+      
+      
+      # --prompt "请将音频内容转换为文字。"
 
 --prompt "请识别电话沟通场景中如下声音片段的话轮转换意图，判断该片段是否包含明确的开始说话信号。请区分以下两种情况：若检测到清晰语音起始或强烈发言意愿（如语句开头、语气转折），应回复<是>；若仅含附和词（如\"嗯\"、\"yeah\"）、非语言声音（如喷嚏、咳嗽、笑声）、噪声或近似静默等非打断性信号，应回复<否>"
 
