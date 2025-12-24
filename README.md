@@ -179,6 +179,7 @@ source .venv/bin/activate
 
 uv pip install -e .
 uv pip install flash-attn==2.7.1.post4 --no-build-isolation
+uv pip install soundfile aiohttp
 ```
 
 ```bash
@@ -196,11 +197,43 @@ vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
   --gpu-memory-utilization 0.8 \
   --max-num-batched-tokens 8192
 
+#       --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/asr_example.wav \
 python batch_kimi/test_kimi_audio.py \
       --base-url http://localhost:8000/v1 \
       --model kimi_audio \
-      --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/asr_example.wav \
-      --prompt "What is being said in this audio?"
+      --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/multiturn/case1/multiturn_a1.wav \
+      --prompt "请将音频内容转换为文字。"
+
+--prompt "请识别电话沟通场景中如下声音片段的话轮转换意图，判断该片段是否包含明确的开始说话信号。请区分以下两种情况：若检测到清晰语音起始或强烈发言意愿（如语句开头、语气转折），应回复<是>；若仅含附和词（如\"嗯\"、\"yeah\"）、非语言声音（如喷嚏、咳嗽、笑声）、噪声或近似静默等非打断性信号，应回复<否>"
 
 python batch_kimi/test_kimi_audio.py --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/asr_example.wav
+
+
+python batch_kimi/stress_test.py \
+      --base-url http://localhost:8000/v1 \
+      --model kimi_audio \
+      --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/multiturn/case1/multiturn_a1.wav \
+      --audio-length 200ms \
+      --concurrency 10 \
+      --num-requests 100 \
+      --streaming
+
+  # Test with 500ms audio, higher concurrency, save results
+  python batch_kimi/stress_test.py \
+      --base-url http://localhost:8000/v1 \
+      --model kimi_audio \
+      --audio-file /home/ec2-user/SageMaker/efs/Projects/Kimi-Audio/test_audios/multiturn/case1/multiturn_a1.wav \
+      --audio-length 500ms \
+      --concurrency 20 \
+      --num-requests 200 \
+      --streaming \
+      --output results.json
+
+  # Short audio test (200ms)
+  python batch_kimi/stress_test.py \
+      --audio-file /path/to/audio.wav \
+      --audio-length 200ms \
+      --concurrency 5 \
+      --num-requests 50 \
+      --streaming
 ```
