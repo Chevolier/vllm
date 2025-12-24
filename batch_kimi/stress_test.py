@@ -354,6 +354,7 @@ async def run_stress_test(
     prompt: str,
     max_tokens: int,
     streaming: bool,
+    warmup: int = 0,
 ) -> AggregatedMetrics:
     """Run the stress test with specified parameters."""
 
@@ -414,9 +415,28 @@ async def run_stress_test(
     connector = aiohttp.TCPConnector(limit=concurrency * 2)
     timeout = aiohttp.ClientTimeout(total=300)  # 5 minute timeout per request
 
-    start_time = time.time()
-
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        # Warmup requests (not counted in metrics)
+        if warmup > 0:
+            print(f"\nRunning {warmup} warmup request(s)...")
+            for i in range(warmup):
+                warmup_start = time.time()
+                if streaming:
+                    await send_request_streaming(
+                        session, url, model, audio_chunks[0],
+                        prompt, -1, max_tokens
+                    )
+                else:
+                    await send_request_non_streaming(
+                        session, url, model, audio_chunks[0],
+                        prompt, -1, max_tokens
+                    )
+                warmup_latency = time.time() - warmup_start
+                print(f"  Warmup {i+1}: {warmup_latency*1000:.2f}ms")
+            print("-" * 60)
+
+        # Main stress test
+        start_time = time.time()
         tasks = [limited_request(session, i) for i in range(num_requests)]
 
         completed = 0
@@ -555,6 +575,12 @@ def main():
         help="Use streaming mode (required for accurate TTFT measurement)",
     )
     parser.add_argument(
+        "--warmup",
+        type=int,
+        default=1,
+        help="Number of warmup requests before stress test (default: 1)",
+    )
+    parser.add_argument(
         "--output",
         default=None,
         help="Output JSON file for results",
@@ -589,6 +615,7 @@ def main():
         prompt=args.prompt,
         max_tokens=args.max_tokens,
         streaming=args.streaming,
+        warmup=args.warmup,
     ))
 
     # Compute and print statistics
