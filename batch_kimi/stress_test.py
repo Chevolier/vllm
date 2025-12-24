@@ -224,6 +224,7 @@ async def send_request_streaming(
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": True,
+        "stream_options": {"include_usage": True},  # Request usage info in stream
         "stop_token_ids": [KIMIA_TEXT_EOS_TOKEN_ID],
     }
 

@@ -214,3 +214,6 @@ ep_kernels_workspace/
 *.wav
 *.pcm
 *.mp3
+
+outputs/
+logs/

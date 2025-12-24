@@ -762,19 +762,13 @@ class KimiAudioProcessor(ProcessorMixin):
         audios: Optional[Union[np.ndarray, list[np.ndarray]]] = None,
         **kwargs,
     ):
-        print(f"[DEBUG PROCESSOR __call__] text={text}, kwargs keys={kwargs.keys()}")
-        print(f"[DEBUG PROCESSOR] extra_tokens: media_begin={self.extra_tokens.media_begin}, media_end={self.extra_tokens.media_end}, user_msg_start={self.extra_tokens.user_msg_start}, kimia_user_msg_start={self.extra_tokens.kimia_user_msg_start}, kimia_text_blank={self.extra_tokens.kimia_text_blank}")
         assert "audio" in kwargs and len(kwargs["audio"]) == 1
         if "sampling_rate" in kwargs:
             assert kwargs["sampling_rate"] == 16000
         messages = []
         if text:
             messages.append({"role": "user", "message_type": "text", "content": text})
-            print(f"[DEBUG PROCESSOR __call__] Added text message")
-        else:
-            print(f"[DEBUG PROCESSOR __call__] NO text message added!")
         messages.append({"role": "user", "message_type": "audio", "content": kwargs["audio"][0]})
-        print(f"[DEBUG PROCESSOR __call__] Total messages: {len(messages)}")
         prompts = self.get_prompt(messages, output_type="text", in_detail=True)
         input_ids = prompts["multi_modal_data"]["input_ids"]
         is_continuous_mask = prompts["multi_modal_data"]["is_continuous_mask"]
@@ -784,13 +778,9 @@ class KimiAudioProcessor(ProcessorMixin):
             from ...transformers_utils.tokenizers import Glm4Tokenizer
             self.audio_tokenizer = Glm4Tokenizer("THUDM/glm-4-voice-tokenizer")
 
-        # TODO(wzy): Add support for padding in a batch,
-        # currently we utilize single tensor as a batch input
         # Use original_audio_input_ids which has BLANKS at text positions (for dual-stream)
         original_audio_list = prompts["multi_modal_data"]["original_audio_input_ids"][0]
         assert isinstance(original_audio_list, list)
-        print(f"[DEBUG PROCESSOR] original_audio_list length: {len(original_audio_list)}")
-        print(f"[DEBUG PROCESSOR] original_audio_list first 30: {original_audio_list[:30]}")
         start_idx = None
         end_idx = None
         for idx, tok in enumerate(original_audio_list):
@@ -798,7 +788,6 @@ class KimiAudioProcessor(ProcessorMixin):
                 start_idx = idx
             elif tok == self.extra_tokens.media_end:
                 end_idx = idx
-        print(f"[DEBUG PROCESSOR] media_begin at idx {start_idx}, media_end at idx {end_idx}")
         assert start_idx is not None and end_idx is not None
 
         wav_tokens = self.audio_tokenizer.tokenize(speech=prompts["multi_modal_data"]["audio"][0])
@@ -813,15 +802,6 @@ class KimiAudioProcessor(ProcessorMixin):
 
         # Get original text_input_ids (with blanks at audio/special positions)
         text_input_ids = prompts["multi_modal_data"]["original_text_input_ids"]
-
-        # Debug: print sequence info
-        print(f"[DEBUG PROCESSOR] input_ids length: {len(input_ids[0])}")
-        print(f"[DEBUG PROCESSOR] audio_tokens length: {len(audio_tokens[0])}")
-        print(f"[DEBUG PROCESSOR] text_input_ids length: {len(text_input_ids[0])}")
-        print(f"[DEBUG PROCESSOR] is_continuous_mask True count: {sum(is_continuous_mask[0])}")
-        print(f"[DEBUG PROCESSOR] First 20 input_ids: {input_ids[0][:20]}")
-        print(f"[DEBUG PROCESSOR] First 20 audio_tokens: {audio_tokens[0][:20]}")
-        print(f"[DEBUG PROCESSOR] First 20 text_input_ids: {text_input_ids[0][:20]}")
 
         inputs = {
             "input_ids": input_ids,

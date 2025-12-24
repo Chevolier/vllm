@@ -173,13 +173,9 @@ class KimiAudioMultiModalProcessor(
         # We MUST convert it back to a string so _apply_hf_processor_main takes
         # the correct code path that uses our processor's input_ids output.
         if not isinstance(prompt, str):
-            print(f"[DEBUG _cached_apply_hf_processor] Converting token_ids (len={len(prompt)}) back to string")
             tokenizer = self.info.get_tokenizer()
             # Decode the token IDs back to text (this gives us the chat-templated prompt)
             prompt = tokenizer.decode(prompt)
-            print(f"[DEBUG _cached_apply_hf_processor] Decoded prompt: {prompt[:100]}...")
-        else:
-            print(f"[DEBUG _cached_apply_hf_processor] prompt is already string: {prompt[:100]}...")
 
         # Call _apply_hf_processor directly to bypass caching logic
         (
@@ -195,9 +191,6 @@ class KimiAudioMultiModalProcessor(
             return_mm_hashes=return_mm_hashes,
         )
 
-        print(f"[DEBUG _cached_apply_hf_processor] prompt_ids length: {len(prompt_ids) if prompt_ids else 'None'}")
-        print(f"[DEBUG _cached_apply_hf_processor] mm_kwargs keys: {list(mm_kwargs.keys()) if hasattr(mm_kwargs, 'keys') else 'no keys method'}")
-
         # NOTE: The tokens are already inserted by the processor
         return prompt_ids, mm_kwargs, mm_hashes, True
 
@@ -208,9 +201,6 @@ class KimiAudioMultiModalProcessor(
         mm_kwargs: Mapping[str, Any],
         tok_kwargs: Mapping[str, object],
     ) -> BatchFeature:
-        print(f"[DEBUG _call_hf_processor] prompt length: {len(prompt)}, first 50 chars: {prompt[:50]}")
-        print(f"[DEBUG _call_hf_processor] mm_data keys: {list(mm_data.keys())}")
-
         # NOTE - we rename audios -> audio in mm data because transformers has
         # deprecated audios for the qwen2audio processor and will remove
         # support for it in transformers 4.54.
@@ -235,7 +225,6 @@ class KimiAudioMultiModalProcessor(
             mm_kwargs=mm_kwargs,
             tok_kwargs=tok_kwargs,
         )
-        print(f"[DEBUG _call_hf_processor] result input_ids shape: {result['input_ids'].shape if 'input_ids' in result else 'N/A'}")
         return result
 
     def _get_data_parser(self) -> MultiModalDataParser:
@@ -468,43 +457,76 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
             # Text-only: just embed the input_ids
             return self.language_model.get_input_embeddings(input_ids)
 
-        # Use the original text_input_ids from the processor (has blanks at audio/special positions)
-        if text_input_ids is not None and len(text_input_ids) > 0:
-            # Convert text_input_ids to tensor
-            text_input_ids_tensor = text_input_ids[0]
-            if isinstance(text_input_ids_tensor, list):
-                text_input_ids_tensor = torch.tensor(text_input_ids_tensor, device=input_ids.device)
-            else:
-                text_input_ids_tensor = text_input_ids_tensor.to(input_ids.device)
-            # Get text embeddings from original text stream
-            text_embeds = self.language_model.get_input_embeddings(text_input_ids_tensor)
-        else:
-            # Fallback: derive from merged input_ids (less accurate)
-            text_input_ids_derived = input_ids.clone()
-            text_input_ids_derived[text_input_ids_derived == 151650] = 151666
-            text_embeds = self.language_model.get_input_embeddings(text_input_ids_derived)
+        # Calculate total audio embedding length
+        total_audio_len = sum(emb.shape[0] for emb in multimodal_embeddings)
+        input_len = input_ids.shape[0]
 
-        # Debug: print shapes
-        print(f"[DEBUG] input_ids shape: {input_ids.shape}")
-        print(f"[DEBUG] text_embeds shape: {text_embeds.shape}")
-        print(f"[DEBUG] num multimodal_embeddings: {len(multimodal_embeddings)}")
-        if len(multimodal_embeddings) > 0:
-            print(f"[DEBUG] audio_emb[0] shape: {multimodal_embeddings[0].shape}")
+        # In V1 batched mode, input_ids may contain tokens from multiple requests
+        # including text-only requests. We need to return embeddings matching input_ids length.
+        if input_len != total_audio_len:
+            # Mixed batch: some requests have audio, some don't
+            # Start with base embeddings from input_ids
+            base_embeds = self.language_model.get_input_embeddings(input_ids)
 
-        # Add audio embeddings (dual-stream combination)
+            # Add audio embeddings at the beginning (audio requests come first in batch)
+            offset = 0
+            for i, audio_emb in enumerate(multimodal_embeddings):
+                audio_seq_len = audio_emb.shape[0]
+                if offset + audio_seq_len <= input_len:
+                    # Add audio embedding contribution
+                    base_embeds[offset:offset + audio_seq_len] += audio_emb.to(
+                        dtype=base_embeds.dtype, device=base_embeds.device)
+                offset += audio_seq_len
+
+            return base_embeds
+
+        # Single audio request or all requests have audio with matching lengths
+        all_embeds = []
         for i, audio_emb in enumerate(multimodal_embeddings):
-            # audio_emb shape: (seq_len, hidden)
-            # text_embeds shape: (batch, seq_len, hidden) or (seq_len, hidden)
-            if text_embeds.shape[0] != audio_emb.shape[0]:
-                print(f"[ERROR] Shape mismatch! text_embeds: {text_embeds.shape}, audio_emb: {audio_emb.shape}")
-            if text_embeds.dim() == 2:
-                # Single sequence
-                text_embeds = text_embeds + audio_emb.to(dtype=text_embeds.dtype)
-            else:
-                # Batched - this shouldn't happen in current vLLM flow
-                text_embeds[i] = text_embeds[i] + audio_emb.to(dtype=text_embeds.dtype)
+            audio_seq_len = audio_emb.shape[0]
 
-        return text_embeds
+            # Get text_input_ids for this audio request
+            if text_input_ids is not None and i < len(text_input_ids):
+                text_ids = text_input_ids[i]
+                if isinstance(text_ids, list):
+                    text_ids = torch.tensor(text_ids, device=input_ids.device)
+                else:
+                    text_ids = text_ids.to(input_ids.device)
+
+                # Handle length mismatch
+                if text_ids.shape[0] != audio_seq_len:
+                    if text_ids.shape[0] > audio_seq_len:
+                        text_ids = text_ids[:audio_seq_len]
+                    else:
+                        pad_len = audio_seq_len - text_ids.shape[0]
+                        pad_tokens = torch.full(
+                            (pad_len,), 151666,  # kimia_text_blank
+                            device=text_ids.device, dtype=text_ids.dtype
+                        )
+                        text_ids = torch.cat([text_ids, pad_tokens])
+
+                text_embeds = self.language_model.get_input_embeddings(text_ids)
+            else:
+                # Fallback: derive from input_ids segment
+                if input_ids.shape[0] >= audio_seq_len:
+                    text_ids = input_ids[:audio_seq_len].clone()
+                    text_ids[text_ids == 151650] = 151666
+                else:
+                    text_ids = torch.full(
+                        (audio_seq_len,), 151666,
+                        device=input_ids.device, dtype=input_ids.dtype
+                    )
+                text_embeds = self.language_model.get_input_embeddings(text_ids)
+
+            # Dual-stream combination: text_embeds + audio_emb
+            combined = text_embeds + audio_emb.to(dtype=text_embeds.dtype)
+            all_embeds.append(combined)
+
+        # Return combined embeddings
+        if len(all_embeds) == 1:
+            return all_embeds[0]
+        else:
+            return torch.cat(all_embeds, dim=0)
 
     def forward(
         self,
