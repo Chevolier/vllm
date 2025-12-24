@@ -187,6 +187,8 @@ uv pip install soundfile aiohttp
 
 export VLLM_LOGGING_LEVEL=DEBUG
 
+# NOTE: Kimi-Audio uses a custom text EOS token <|im_kimia_text_eos|> (token 151667).
+# The stop token is specified per-request in the API call (see test_kimi_audio.py).
 vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
 	--served-model-name kimi_audio \
 	--max-model-len 4096 \

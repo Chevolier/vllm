@@ -55,6 +55,7 @@ def test_kimi_audio(
     audio_url: str = None,
     prompt: str = None,
     use_raw: bool = False,
+    max_tokens: int = 256,
 ):
     """Send a single request to test Kimi-Audio model."""
 
@@ -163,14 +164,19 @@ def test_kimi_audio(
         # Send request
         print("Sending request...")
 
+        # Kimi-Audio uses token 151667 (<|im_kimia_text_eos|>) as text EOS
+        # This must be included as a stop token for proper generation termination
+        KIMIA_TEXT_EOS_TOKEN_ID = 151667
+
         if use_raw:
             # Send raw HTTP request for debugging
             url = f"{base_url}/chat/completions"
             payload = {
                 "model": model,
                 "messages": messages,
-                "max_tokens": 256,
+                "max_tokens": max_tokens,
                 "temperature": 0.0,
+                "stop_token_ids": [KIMIA_TEXT_EOS_TOKEN_ID],
             }
             print(f"Raw request URL: {url}")
             print(f"Raw request payload (messages structure):")
@@ -191,11 +197,13 @@ def test_kimi_audio(
                 print(json.dumps(result, indent=2))
         else:
             # Use OpenAI client
+            # Use extra_body to pass vLLM-specific stop_token_ids parameter
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                max_tokens=256,
+                max_tokens=max_tokens,
                 temperature=0.0,
+                extra_body={"stop_token_ids": [KIMIA_TEXT_EOS_TOKEN_ID]},
             )
 
             print("-" * 60)
@@ -250,6 +258,12 @@ def main():
         action="store_true",
         help="Use raw HTTP request instead of OpenAI client (for debugging)",
     )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=256,
+        help="Maximum number of tokens to generate (default: 256)",
+    )
 
     args = parser.parse_args()
 
@@ -260,6 +274,7 @@ def main():
         audio_url=args.audio_url,
         prompt=args.prompt,
         use_raw=args.raw,
+        max_tokens=args.max_tokens,
     )
 
 

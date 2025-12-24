@@ -115,7 +115,7 @@ class AggregatedMetrics:
         if self.total_output_tokens > 0 and self.latencies:
             # TPOT = (latency - ttft) / output_tokens for each request
             tpots = []
-            for i, (lat, ttft) in enumerate(zip(self.latencies, self.ttfts)):
+            for lat, ttft in zip(self.latencies, self.ttfts):
                 if self.total_output_tokens > 0:
                     # Estimate per-request output tokens (average)
                     avg_tokens = self.total_output_tokens / len(self.latencies)
@@ -215,12 +215,16 @@ async def send_request_streaming(
         }
     ]
 
+    # Kimi-Audio uses token 151667 (<|im_kimia_text_eos|>) as text EOS
+    KIMIA_TEXT_EOS_TOKEN_ID = 151667
+
     payload = {
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": True,
+        "stop_token_ids": [KIMIA_TEXT_EOS_TOKEN_ID],
     }
 
     try:
@@ -299,12 +303,16 @@ async def send_request_non_streaming(
         }
     ]
 
+    # Kimi-Audio uses token 151667 (<|im_kimia_text_eos|>) as text EOS
+    KIMIA_TEXT_EOS_TOKEN_ID = 151667
+
     payload = {
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": False,
+        "stop_token_ids": [KIMIA_TEXT_EOS_TOKEN_ID],
     }
 
     try:
@@ -366,7 +374,7 @@ async def run_stress_test(
     # Prepare audio chunks
     print(f"Preparing {num_requests} audio chunks...")
     audio_chunks = []
-    for i in range(num_requests):
+    for _ in range(num_requests):
         chunk = extract_random_chunk(audio_data, sample_rate, length_sec)
         audio_b64 = audio_to_base64(chunk, sample_rate)
         audio_chunks.append(audio_b64)
