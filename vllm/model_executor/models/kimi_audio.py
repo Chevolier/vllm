@@ -121,8 +121,10 @@ class KimiAudioMultiModalProcessor(
         hf_processor_mm_kwargs: Mapping[str, object],
     ) -> Mapping[str, MultiModalFieldConfig]:
         return dict(
-            # audio=MultiModalFieldConfig.batched("audio"),
+            # Note: input_ids is NOT included here because it's extracted as prompt_ids
+            # by the base class before mm_kwargs is built
             audio_input_ids=MultiModalFieldConfig.batched("audio"),
+            text_input_ids=MultiModalFieldConfig.batched("audio"),  # Original text stream
             is_continuous_mask=MultiModalFieldConfig.batched("audio"),
             whisper_input_feature=MultiModalFieldConfig.batched("audio"),
         )
@@ -161,12 +163,31 @@ class KimiAudioMultiModalProcessor(
         *,
         return_mm_hashes: bool,
     ):
+        # For Kimi-Audio, we MUST use the direct path (not cached) because:
+        # 1. The cached path tokenizes prompt separately from audio
+        # 2. Kimi-Audio's dual-stream architecture requires the processor to create
+        #    the proper merged token sequence (audio + text streams)
+        # 3. The processor's input_ids output must be used as-is
+
+        # CRITICAL: If prompt is already token IDs, vLLM has pre-tokenized it.
+        # We MUST convert it back to a string so _apply_hf_processor_main takes
+        # the correct code path that uses our processor's input_ids output.
+        if not isinstance(prompt, str):
+            print(f"[DEBUG _cached_apply_hf_processor] Converting token_ids (len={len(prompt)}) back to string")
+            tokenizer = self.info.get_tokenizer()
+            # Decode the token IDs back to text (this gives us the chat-templated prompt)
+            prompt = tokenizer.decode(prompt)
+            print(f"[DEBUG _cached_apply_hf_processor] Decoded prompt: {prompt[:100]}...")
+        else:
+            print(f"[DEBUG _cached_apply_hf_processor] prompt is already string: {prompt[:100]}...")
+
+        # Call _apply_hf_processor directly to bypass caching logic
         (
             prompt_ids,
             mm_kwargs,
             mm_hashes,
-            _,
-        ) = super()._cached_apply_hf_processor(
+            is_update_applied,
+        ) = self._apply_hf_processor(
             prompt=prompt,
             mm_data_items=mm_data_items,
             hf_processor_mm_kwargs=hf_processor_mm_kwargs,
@@ -174,7 +195,10 @@ class KimiAudioMultiModalProcessor(
             return_mm_hashes=return_mm_hashes,
         )
 
-        # NOTE: The tokens are already inserted by the chat template
+        print(f"[DEBUG _cached_apply_hf_processor] prompt_ids length: {len(prompt_ids) if prompt_ids else 'None'}")
+        print(f"[DEBUG _cached_apply_hf_processor] mm_kwargs keys: {list(mm_kwargs.keys()) if hasattr(mm_kwargs, 'keys') else 'no keys method'}")
+
+        # NOTE: The tokens are already inserted by the processor
         return prompt_ids, mm_kwargs, mm_hashes, True
 
     def _call_hf_processor(
@@ -184,6 +208,9 @@ class KimiAudioMultiModalProcessor(
         mm_kwargs: Mapping[str, Any],
         tok_kwargs: Mapping[str, object],
     ) -> BatchFeature:
+        print(f"[DEBUG _call_hf_processor] prompt length: {len(prompt)}, first 50 chars: {prompt[:50]}")
+        print(f"[DEBUG _call_hf_processor] mm_data keys: {list(mm_data.keys())}")
+
         # NOTE - we rename audios -> audio in mm data because transformers has
         # deprecated audios for the qwen2audio processor and will remove
         # support for it in transformers 4.54.
@@ -202,12 +229,14 @@ class KimiAudioMultiModalProcessor(
             sampling_rate=16000,
         )
 
-        return super()._call_hf_processor(
+        result = super()._call_hf_processor(
             prompt=prompt,
             mm_data=mm_data,
             mm_kwargs=mm_kwargs,
             tok_kwargs=tok_kwargs,
         )
+        print(f"[DEBUG _call_hf_processor] result input_ids shape: {result['input_ids'].shape if 'input_ids' in result else 'N/A'}")
+        return result
 
     def _get_data_parser(self) -> MultiModalDataParser:
         return MultiModalDataParser(target_sr=16000)
@@ -306,20 +335,38 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
         audio_input_ids = audio_input["audio_input_ids"]
         whisper_input_feature = audio_input["whisper_input_feature"]
         is_continuous_mask = audio_input["is_continuous_mask"]
-        assert 151666 not in audio_input_ids
-        batch_size = whisper_input_feature.shape[0]
+        # audio_input_ids should have: blank at text positions, discrete audio tokens at audio positions
+
+        # Ensure tensors are properly shaped
+        if isinstance(audio_input_ids, list):
+            audio_input_ids = torch.tensor(audio_input_ids)
+        if audio_input_ids.dim() == 1:
+            audio_input_ids = audio_input_ids.unsqueeze(0)  # Add batch dimension
+
+        if isinstance(is_continuous_mask, list):
+            is_continuous_mask = torch.tensor(is_continuous_mask)
+        if is_continuous_mask.dim() == 1:
+            is_continuous_mask = is_continuous_mask.unsqueeze(0)
+
+        if isinstance(whisper_input_feature, list):
+            # whisper_input_feature might be raw audio waveform as tensor
+            if len(whisper_input_feature) == 1:
+                whisper_input_feature = whisper_input_feature[0]
+        if whisper_input_feature.dim() == 1:
+            whisper_input_feature = whisper_input_feature.unsqueeze(0)
+
+        batch_size = 1  # We process one audio at a time
 
         whisper_input_feature_tmp = []
-        for i in range(batch_size):
-            tmp = self.audio_tower.tokenize_waveform(whisper_input_feature[i])
-            whisper_input_feature_tmp.append(tmp.reshape(tmp.shape[0], int(tmp.shape[1] // 4), tmp.shape[2] * 4))
+        tmp = self.audio_tower.tokenize_waveform(whisper_input_feature)
+        whisper_input_feature_tmp.append(tmp.reshape(tmp.shape[0], int(tmp.shape[1] // 4), tmp.shape[2] * 4))
         whisper_input_feature = whisper_input_feature_tmp
 
         device = self.language_model.embed_tokens.weight.device
         audio_input_ids = audio_input_ids.to(device)
-        start_idx = (audio_input_ids == 151670).nonzero()[0, 1] + 1
-        end_idx = (audio_input_ids == 151661).nonzero()[0, 1]
-        audio_input_ids[:, start_idx:end_idx] = 151666
+        is_continuous_mask = is_continuous_mask.to(device)
+        # NOTE: Do NOT replace discrete audio tokens with blank - we need to preserve them
+        # for the embedding. The original Kimi-Audio uses discrete audio embeddings + whisper embeddings.
 
         audio_emb = self.language_model.get_input_embeddings(audio_input_ids)
         if self.config.use_whisper_feature:
@@ -350,7 +397,7 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
 
             whisper_emb = self.multi_modal_projector(expanded_whisper)
             whisper_emb = whisper_emb.to(device)
-            is_continuous_mask = is_continuous_mask.to(device)
+            # is_continuous_mask already on device from earlier
             whisper_emb = whisper_emb * is_continuous_mask[:, :, None]
 
             encoder_input_addwith_discrete_token = (
@@ -376,10 +423,15 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
     #     return processed_features
 
     def get_multimodal_embeddings(
-            self, **kwargs: object) -> Union[MultiModalEmbeddings, None]:
+            self, **kwargs: object) -> Optional[list]:
         audio_input_ids = kwargs.pop('audio_input_ids', None)
+        # text_input_ids is extracted in forward() before this call
+        kwargs.pop('text_input_ids', None)  # Remove but don't use here
         is_continuous_mask = kwargs.pop('is_continuous_mask', None)
         whisper_input_feature = kwargs.pop('whisper_input_feature', None)
+
+        if audio_input_ids is None:
+            return None
 
         audio_embeddings = []
         for i in range(len(audio_input_ids)):
@@ -404,27 +456,55 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
     def get_input_embeddings(
         self,
         input_ids: torch.Tensor,
-        multimodal_embeddings: Optional[MultiModalEmbeddings] = None,
+        multimodal_embeddings: Optional[list] = None,
+        text_input_ids: Optional[list] = None,
     ) -> torch.Tensor:
-        text_input_ids = input_ids.clone()
-        text_input_ids[text_input_ids == 151650] = 151666
-        inputs_embeds = self.language_model.get_input_embeddings(text_input_ids)
+        # Kimi-Audio uses dual-stream architecture:
+        # - audio stream: blank at text positions, (discrete_audio + whisper) at audio positions
+        # - text stream: text at text positions, blank at audio/special positions
+        # Final embedding = audio_emb + text_emb
 
-        if multimodal_embeddings is not None and \
-            len(multimodal_embeddings) != 0:
-            # customized merge
-            start_indices = (input_ids == 151670).nonzero(as_tuple=True)[0]
-            end_indices = (input_ids == 151671).nonzero(as_tuple=True)[0]
-            mask = torch.zeros_like(input_ids, dtype=torch.bool)
-            for start, end in zip(start_indices, end_indices):
-                mask[start:end+1] = True
-            inputs_embeds = self._merge_multimodal_embeddings(
-                inputs_embeds,
-                mask,
-                multimodal_embeddings,
-            )
+        if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
+            # Text-only: just embed the input_ids
+            return self.language_model.get_input_embeddings(input_ids)
 
-        return inputs_embeds
+        # Use the original text_input_ids from the processor (has blanks at audio/special positions)
+        if text_input_ids is not None and len(text_input_ids) > 0:
+            # Convert text_input_ids to tensor
+            text_input_ids_tensor = text_input_ids[0]
+            if isinstance(text_input_ids_tensor, list):
+                text_input_ids_tensor = torch.tensor(text_input_ids_tensor, device=input_ids.device)
+            else:
+                text_input_ids_tensor = text_input_ids_tensor.to(input_ids.device)
+            # Get text embeddings from original text stream
+            text_embeds = self.language_model.get_input_embeddings(text_input_ids_tensor)
+        else:
+            # Fallback: derive from merged input_ids (less accurate)
+            text_input_ids_derived = input_ids.clone()
+            text_input_ids_derived[text_input_ids_derived == 151650] = 151666
+            text_embeds = self.language_model.get_input_embeddings(text_input_ids_derived)
+
+        # Debug: print shapes
+        print(f"[DEBUG] input_ids shape: {input_ids.shape}")
+        print(f"[DEBUG] text_embeds shape: {text_embeds.shape}")
+        print(f"[DEBUG] num multimodal_embeddings: {len(multimodal_embeddings)}")
+        if len(multimodal_embeddings) > 0:
+            print(f"[DEBUG] audio_emb[0] shape: {multimodal_embeddings[0].shape}")
+
+        # Add audio embeddings (dual-stream combination)
+        for i, audio_emb in enumerate(multimodal_embeddings):
+            # audio_emb shape: (seq_len, hidden)
+            # text_embeds shape: (batch, seq_len, hidden) or (seq_len, hidden)
+            if text_embeds.shape[0] != audio_emb.shape[0]:
+                print(f"[ERROR] Shape mismatch! text_embeds: {text_embeds.shape}, audio_emb: {audio_emb.shape}")
+            if text_embeds.dim() == 2:
+                # Single sequence
+                text_embeds = text_embeds + audio_emb.to(dtype=text_embeds.dtype)
+            else:
+                # Batched - this shouldn't happen in current vLLM flow
+                text_embeds[i] = text_embeds[i] + audio_emb.to(dtype=text_embeds.dtype)
+
+        return text_embeds
 
     def forward(
         self,
@@ -440,9 +520,12 @@ class KimiAudioForConditionalGeneration(nn.Module, SupportsMultiModal,
         # NOTE: In v1, inputs_embeds is always generated at model runner, this
         # condition is for v0 compatibility.
         elif inputs_embeds is None:
+            # Extract text_input_ids before get_multimodal_embeddings pops it
+            text_input_ids = kwargs.get('text_input_ids', None)
             multimodal_embeddings = self.get_multimodal_embeddings(**kwargs)
             inputs_embeds = self.get_input_embeddings(input_ids,
-                                                      multimodal_embeddings)
+                                                      multimodal_embeddings,
+                                                      text_input_ids)
             input_ids = None
 
         hidden_states = self.language_model(
