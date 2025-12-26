@@ -27,7 +27,7 @@ echo ""
 
 for audio_length in "${AUDIO_LENGTHS[@]}"; do
     for concurrency in "${CONCURRENCIES[@]}"; do
-        output_file="outputs/results_${audio_length}_c${concurrency}_prefixcache_warmup0.json"
+        output_file="outputs/results_${audio_length}_c${concurrency}_tp2.json"
 
         echo "=========================================="
         echo "Running test: audio_length=${audio_length}, concurrency=${concurrency}"
@@ -44,7 +44,7 @@ for audio_length in "${AUDIO_LENGTHS[@]}"; do
             --concurrency "${concurrency}" \
             --num-requests "${NUM_REQUESTS}" \
             --streaming \
-            --warmup 0 \
+            --warmup 1 \
             --output "${output_file}"
 
         echo ""

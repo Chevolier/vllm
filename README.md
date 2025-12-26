@@ -189,16 +189,10 @@ export VLLM_LOGGING_LEVEL=DEBUG
 
 # NOTE: Kimi-Audio uses a custom text EOS token <|im_kimia_text_eos|> (token 151667).
 # The stop token is specified per-request in the API call (see test_kimi_audio.py).
-nohup vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
-	--served-model-name kimi_audio \
-	--max-model-len 4096 \
-	--max-num-seqs 20 \
-	--limit-mm-per-prompt '{"audio": 1}' \
-	--trust-remote-code \
-	--enable-prefix-caching \
-  --gpu-memory-utilization 0.8 \
-  --max-num-batched-tokens 8192 > logs/server_prefix_cache.out 2>&1 &
 
+# Change --gpu-memory-utilization and --tensor-parallel-size for different machines, for instance:
+# 1xL40s, --gpu-memory-utilization 0.8 --tensor-parallel-size 1
+# 2xA10G, --gpu-memory-utilization 0.6 --tensor-parallel-size 2
 nohup vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
 	--served-model-name kimi_audio \
 	--max-model-len 1024 \
@@ -206,14 +200,11 @@ nohup vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
 	--limit-mm-per-prompt '{"audio": 1}' \
 	--trust-remote-code \
 	--no-enable-prefix-caching \
-  --gpu-memory-utilization 0.7 \
+  --gpu-memory-utilization 0.6 \
   --tensor-parallel-size 2 \
   --max-num-batched-tokens 8192 > logs/server_tp2.out 2>&1 &
 
-    # "请将音频内容转换为文字。"
-    test_audios/asr_example.wav
-
-# with warmup
+# single test with warmup
 python batch_kimi/test_kimi_audio.py \
       --base-url http://localhost:8000/v1 \
       --model kimi_audio \
@@ -235,7 +226,7 @@ python batch_kimi/stress_test.py \
       --concurrency 1 \
       --num-requests 500 \
       --streaming \
-      --output results_200ms_c1.json
+      --output outputs/results_200ms_c1_tp2.json
 
 # 批量压测
 bash batch_kimi/stress_test.sh
