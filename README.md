@@ -199,6 +199,17 @@ nohup vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
   --gpu-memory-utilization 0.8 \
   --max-num-batched-tokens 8192 > logs/server_prefix_cache.out 2>&1 &
 
+nohup vllm serve /home/ec2-user/SageMaker/efs/Models/Kimi-Audio-7B-Instruct \
+	--served-model-name kimi_audio \
+	--max-model-len 1024 \
+	--max-num-seqs 10 \
+	--limit-mm-per-prompt '{"audio": 1}' \
+	--trust-remote-code \
+	--no-enable-prefix-caching \
+  --gpu-memory-utilization 0.7 \
+  --tensor-parallel-size 2 \
+  --max-num-batched-tokens 8192 > logs/server_tp2.out 2>&1 &
+
     # "请将音频内容转换为文字。"
     test_audios/asr_example.wav
 
